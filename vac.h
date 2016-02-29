@@ -16,13 +16,14 @@
 #include <winternl.h>
 #include <TlHelp32.h>
 #include <Psapi.h>
+#include <Pathcch.h>
 
 #include "hook.h"
 
 #define EXIT_MSG(x) { MessageBoxA(NULL, x, "9frag alert!", MB_OK); ExitProcess(0x0); }
 #define CHECKFILE(x) if ( !x ) { return FALSE; }
 #define CHECK_VHOOK(x, y) if ( !(x = y) ) { DetectedCheat(x); }
-#define CHECK_ESP_FN_CURRENT 0x1
+#define CHECK_ESP_FN_CURRENT 0x5
 
 typedef struct {
 	DWORD dwBaseEngine;
@@ -36,13 +37,12 @@ typedef struct _ProtectedCalls_ {
 	BYTE bOp[70];
 	BYTE bBackup[5];
 	BOOL isUnlock;
-	HANDLE hEvent;
 } pCall;
 
 typedef struct _VirtualQueryProtect_ {
 	DWORD dwAddressProtected[256];
 	DWORD dwFnSize[256];
-	DWORD dwSize;
+	DWORD dwCallOriginal;
 } vQueryProtect;
 
 static DWORD g_dwClient[43] =
@@ -102,7 +102,11 @@ static const char *g_szFile[] = {
 	"a35aa6087c18c9ef5ca3f46d63ca2671", "b542c04c06fed33812ac0a0ebd8ec88e",
 	"fbfeb5dae01b4b2456cd1ebabbed4922", "4cbd03f4c6da4cb5c0a619579a16bc19",
 	"86660114a3823dd4f2960fe1ab92123d", "866e49fc80c2b7500334a716b177afad"
-};
+}, *g_szMd5BadApp[] = { 
+	/* DCInjector.exe */ "d7a7966cc50771be6bd25bf494ee9673", /* sinJect.exe */"1de8afdce3d6c1c2e05b83c7ce77fd30", 
+	/* Winject.exe */ "d17e73c68c23598558f5b3c23da04755", /*ollydbg v1 */ "bd3abb4ac01da6edb30006cc55953be8", 
+	/* ollydbg v2 */ "a8d8531a3995494a1cfc62f7e7cc77ec", /* autoinjectordll */"1dbb21e7ef1732f3235227e2a9d84c23",
+	/*extreme-injector */ "ecc00d4e4b2cbf7caefdce122f017c3d"} ;
 
 static pCall g_protectedCallSt[CHECK_ESP_FN_CURRENT] = {0};
 static BYTE g_bVirtualQuery[6]  = {0};
@@ -111,10 +115,8 @@ static vQueryProtect vQProtect = {0};
 
 void Init9fragAC ( );
 void StartAC ( );
+BOOL isDetectedBadApp ( );
 BOOL DetectDebug ( );
-//void InitProtectedMemory();
-//void RangeProtectMemory( DWORD dwIndex, DWORD dwAddress, DWORD dwSize, DWORD dwSecurity );
-//BOOL WINAPI VirtualProtect_Hook( LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWORD lpflOldProtect );
 BOOL GetHashMD5File( const char *szFileName, char *pszMd5 );
 BOOL InitMD5Check ( );
 BOOL CompareArrayString(const char *szText, const char *pArray[], DWORD dwSize );
@@ -123,7 +125,8 @@ BOOL CheckFileMD5 ( const char *szPathRoot, const char *szFile, const char *szMD
 BOOL InitMD5Check( );
 BOOL VirtualTableCheck( DWORD dwBase );
 BOOL SignatureCheck ( );
-void InitProtectedCalls ( DWORD dwIndex, DWORD dwToProtected );
+void InitProtectedCalls ( );
+void SetProtectedCalls ( DWORD dwIndex, DWORD dwToProtected, DWORD dwOriginalCall );
 void ProtectedCalls_Check ( DWORD dwAddr, DWORD dwIndex );
 void ProtectedCalls_Check_Before ( DWORD dwIndex ) ;
 BOOL CheckVirtualTableHook ( DWORD *pAddrA, DWORD *pAddrB, DWORD dwBase, DWORD dwSize );

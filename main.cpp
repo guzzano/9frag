@@ -28,7 +28,7 @@ BOOL APIENTRY DllMain( HMODULE hModule, DWORD dwReason, LPVOID lpReserved ) {
 	//MessageBoxA(NULL, "Listo el mío.", "Cargado", MB_OK);
 
 	if ( dwReason == DLL_PROCESS_ATTACH ) {
-		//AllocConsole();
+		AllocConsole();
 
 		/*while ( TRUE ) {
 			dwEngineBase = (DWORD) GetModuleHandleA("hw.dll");
