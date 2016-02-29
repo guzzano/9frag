@@ -23,7 +23,7 @@
 #define EXIT_MSG(x) { MessageBoxA(NULL, x, "9frag alert!", MB_OK); ExitProcess(0x0); }
 #define CHECKFILE(x) if ( !x ) { return FALSE; }
 #define CHECK_VHOOK(x, y) if ( !(x = y) ) { DetectedCheat(x); }
-#define CHECK_ESP_FN_CURRENT 0x5
+#define CHECK_ESP_FN_CURRENT 9
 
 typedef struct {
 	DWORD dwBaseEngine;

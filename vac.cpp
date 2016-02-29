@@ -1,5 +1,5 @@
 /*	
-	Copyright (c) 9frag.ve - all rights reserved.
+	Copyright (c) 9frag.ve - all rights reserved.	
 
 	Unauthorized copying of this file, via any medium is 
 	strictly prohibited proprietary and confidential.
@@ -12,6 +12,7 @@
 
 LONG WINAPI UnhandledException (LPEXCEPTION_POINTERS exceptionInfo)  
 {
+	/* Esta no era la verdadera función de la exepción :( */
 	MessageBoxA(NULL, "... *sorry, vAC is crashed* ;(", "9frag alert!", MB_OK);
 	return EXCEPTION_EXECUTE_HANDLER;  
 }  
@@ -37,6 +38,7 @@ void Init9fragAC ( ) {
 
 void StartAC ( ) {
 	BOOL isDetected;
+	DWORD dwRet;
 
 	InitProtectedCalls();
 		
@@ -45,8 +47,15 @@ void StartAC ( ) {
 		//CHECK_VHOOK( isDetected, CheckVirtualTableHook (g_dwClient, (DWORD *) (g_Data.dwBaseEngine +  0x122F540), g_Data.dwBaseClient,  43) );
 
 		for ( DWORD dwIndex = 0; dwIndex < CHECK_ESP_FN_CURRENT; dwIndex++) {
-			if ( g_protectedCallSt[dwIndex].isUnlock ) 
+			if ( g_protectedCallSt[dwIndex].isUnlock ) {
+				/*dwRet = memcmp((void *) g_protectedCallSt[dwIndex].dwAddress, g_protectedCallSt[dwIndex].bBackup, sizeof (g_protectedCallSt[dwIndex].bBackup));
+				
+				if ( dwRet != 0 ) {
+					MessageBoxA(NULL, "El mio...", "...", MB_OK);
+				}*/
+
 				ProtectedCalls_Check_Before(dwIndex);
+			}
 		}
 			
 		if ( DetectDebug() ) 
@@ -222,15 +231,17 @@ BOOL SignatureCheck ( ) {
 void InitProtectedCalls ( ) {
 	/* opengl */
 	SetProtectedCalls(0, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glBegin"),		0);
-	SetProtectedCalls(1, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glEnd"),		    0);	
-	SetProtectedCalls(2, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glVertex3fv"),   0);	
+	SetProtectedCalls(1, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glEnd"),			0);	
+	SetProtectedCalls(2, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glVertex3fv"),	0);	
 	SetProtectedCalls(3, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glClear"),		0);
-	SetProtectedCalls(4, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glPopMatrix"),   0);
+	SetProtectedCalls(4, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glPopMatrix"),	0);
 
-	/* game */
+	/* motor */
 	SetProtectedCalls(5, g_Data.dwBaseEngine + 0xc570,  0);  // GetLocalPlayer
 	SetProtectedCalls(6, g_Data.dwBaseEngine + 0x3c730, 0);  // pfnFillRGBA
 	SetProtectedCalls(7, g_Data.dwBaseEngine + 0x6d10,  0);  // pfnDrawLocalizedConsoleString
+	SetProtectedCalls(8, g_Data.dwBaseEngine + 0xc980,  0);  // pfnSetScreenFade
+	SetProtectedCalls(9, g_Data.dwBaseEngine + 0xc5b0,  0);  // GetEntityByIndex
 }
 
 void SetProtectedCalls ( DWORD dwIndex, DWORD dwToProtected, DWORD dwOriginalCall ) {
@@ -262,7 +273,7 @@ void SetProtectedCalls ( DWORD dwIndex, DWORD dwToProtected, DWORD dwOriginalCal
 
 void ProtectedCalls_Check ( DWORD dwIndex, DWORD dwAddr ) {
 	MEMORY_BASIC_INFORMATION mInfo;
-	char szModule[MAX_PATH];
+	char szModule[MAX_PATH], szMd5[33];
 	DWORD dwLen;
 
 	VirtualQuery((void *) dwAddr, &mInfo, sizeof (MEMORY_BASIC_INFORMATION));
@@ -275,12 +286,22 @@ void ProtectedCalls_Check ( DWORD dwIndex, DWORD dwAddr ) {
 	 *    DetectedCheat(dwAddr);
 	*/
 
+	//GetMo
+	//printf("%s\n", szModule);
+
+
+	/*if ( dwLen ) {
+		GetHashMD5File(szModule, szMd5);
+	} else {
+		DetectedCheat(dwAddr);
+	}*/
+
 	UnHookInMemory(NULL, NULL, g_protectedCallSt[dwIndex].dwAddress, g_protectedCallSt[dwIndex].bBackup);
 	g_protectedCallSt[dwIndex].isUnlock = TRUE;
 }
 
 void ProtectedCalls_Check_Before ( DWORD dwIndex ) {
-	HookInMemory(0xE9, NULL, NULL, g_protectedCallSt[dwIndex].dwAddress, (DWORD) &g_protectedCallSt[dwIndex].bOp[0], NULL);
+	HookInMemory(0xE9, NULL, NULL, g_protectedCallSt[dwIndex].dwAddress, (DWORD) &g_protectedCallSt[dwIndex].bOp[0], g_protectedCallSt[dwIndex].bBackup);
 	g_protectedCallSt[dwIndex].isUnlock = FALSE;
 }	
 
@@ -296,10 +317,13 @@ BOOL CheckVirtualTableHook ( DWORD *pAddrA, DWORD *pAddrB, DWORD dwBase, DWORD d
 }
 
 void DetectedCheat ( DWORD dwAddr ) {
-	MessageBoxA(NULL, "Detected", "9frag", MB_OK);
-	return; 
+	DWORD * pInGame = (DWORD *) 0x10565C0 + g_Data.dwBaseClient;
 
-	DWORD * pInGame = (DWORD *) 0x10565C0 ; // + Base Module;
+	if ( *pInGame > 4 ) {
+		// send data...
+	}
+
+
 
 	/*if ( dwAddr ) {
 		VirtualQuery((LPVOID) dwAddr, &mInf, sizeof (PMEMORY_BASIC_INFORMATION));
