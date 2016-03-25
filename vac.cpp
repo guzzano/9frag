@@ -10,18 +10,14 @@
 #include "vac.h"
 
 
-LONG WINAPI UnhandledException (LPEXCEPTION_POINTERS exceptionInfo)  
+/*LONG WINAPI UnhandledException (LPEXCEPTION_POINTERS exceptionInfo)  
 {
-	/* Esta no era la verdadera función de la exepción :( */
 	MessageBoxA(NULL, "... *sorry, vAC is crashed* ;(", "9frag alert!", MB_OK);
 	return EXCEPTION_EXECUTE_HANDLER;  
-}  
+}*/
 
 void Init9fragAC ( ) {
-	/*if ( !InitMD5Check( ) )
-		EXIT_MSG("Sorry, you failed the directory safety test. Update client or delete suspicious files."); */
-
-	SetUnhandledExceptionFilter(UnhandledException);
+	AllocConsole();
 
 	while ( TRUE ) {
 		g_Data.dwBaseEngine = (DWORD) GetModuleHandleA("hw.dll");
@@ -32,39 +28,146 @@ void Init9fragAC ( ) {
 	}
 
 	if ( !CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE) StartAC, NULL, 0, NULL) )
-		EXIT_MSG("Sorry, vAC thread cannot start. Please reboot computer.");
+		EXIT_MSG("Discúlpanos, vAC no se puedo iniciar, reinicia la computadora y intenta de nuevo.");
+}
+
+//void AnalysisMemoryAdd
+
+
+BOOL isReaMemory( DWORD dwProtect ) {
+	switch ( dwProtect ) {
+		case PAGE_EXECUTE:
+		case PAGE_EXECUTE_READ:
+		case PAGE_EXECUTE_READWRITE:
+		case PAGE_EXECUTE_WRITECOPY:
+		case PAGE_READONLY:
+		case PAGE_WRITECOPY:
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+BYTE *SearchBytePattern ( BYTE *pData, DWORD dwLenData, BYTE *pPattern, DWORD dwLenPattern ) {
+	BYTE *pFound, *pTemp = pData;
+	DWORD dwLen = dwLenData;
+
+	while ( (pFound = (BYTE *) memchr(pTemp, pPattern[0], sizeof (BYTE))) != NULL ) {
+		if ( memcmp(pFound, pPattern, dwLenPattern ) == 0 ) return pFound;
+		pTemp = (BYTE *) pFound + dwLenPattern;
+
+		if ( (DWORD) (pTemp - pData) > dwLenData) break; 
+	}
+
+	return NULL;
+}
+
+void AddBaseModules( DWORD dwBase ) {
+	PagesModules *pAux = (PagesModules *) malloc(sizeof(PagesModules));
+	if ( !pAux ) return;
+
+	pAux->dwBase = dwBase;
+	pAux->pNext = NULL;
+
+	if ( !g_pFirts ) {
+		g_pFirts = pAux;
+		g_pLast = pAux;
+	} else { 
+		g_pLast->pNext = pAux;
+		g_pLast = pAux;
+	}
+}
+
+void RemoveBaseModules( DWORD dwBase ) {
+	PagesModules *pAux = g_pFirts, *pPrev = NULL;
+	if ( !pAux ) return;
+
+	while ( pAux != NULL ) {
+		if ( pAux->dwBase == dwBase ) {
+			if ( pPrev ) pPrev->pNext = pAux->pNext;
+			else if ( !pPrev ) g_pFirts = pAux->pNext;
+		}
+
+		pPrev = pAux;
+		pAux = pAux->pNext;
+	}
+}
+
+/* La idea principal era hacerlo funcionar mediante en analísis de la memoria y la comparación con 
+ * los módulos en ldr del PEB, pero en esta versión no sé porque no hay margen correcto en la estructura
+ * y me da datos en donde no debería.
+
+	LDR_DATA_TABLE_ENTRY *pLdrDLL;
+
+ 	__asm push eax
+	__asm mov eax, fs:[ 0x30 ]
+	__asm mov eax, [ eax + 0xC ]
+	__asm mov eax, [ eax + 0x14 ]
+	__asm mov pLdrDLL, eax
+	__asm pop eax 
+*/
+
+BOOL AnalysisMemoryPages( ) {
+	BYTE MZHeader[4] = {0x4D, 0x5A, 0x90}, *pData = NULL, *pFound = NULL;
+	MEMORY_BASIC_INFORMATION mInfo = {0};
+	SYSTEM_INFO sInfo = {0};
+	DWORD dwLast = 0, dwBase;
+	HANDLE hSnap;
+	MODULEENTRY32 m32 = {0};
+
+	GetSystemInfo(&sInfo);
+
+	for ( DWORD dwAddr = 0; dwAddr <= (DWORD) sInfo.lpMaximumApplicationAddress; ) {
+		VirtualQuery((void *) dwAddr, &mInfo, sizeof (MEMORY_BASIC_INFORMATION));
+		if ( mInfo.State == MEM_COMMIT && isReaMemory(mInfo.Protect) ) {	
+			dwBase = ( dwLast == (DWORD) mInfo.AllocationBase ) ? (DWORD) mInfo.BaseAddress : (DWORD) mInfo.AllocationBase; 
+			pData = (BYTE *) dwBase;
+
+			if ( (pFound = SearchBytePattern(pData, (DWORD) mInfo.RegionSize, MZHeader, sizeof (MZHeader))) != NULL )
+				AddBaseModules(dwBase);
+
+			dwLast = (DWORD) mInfo.AllocationBase;
+		}
+
+		dwAddr += mInfo.RegionSize;
+		memset(&mInfo, 0, sizeof (MEMORY_BASIC_INFORMATION));
+	}
+
+	hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE32 | TH32CS_SNAPMODULE , 0);
+
+	if ( hSnap == INVALID_HANDLE_VALUE ) 
+		return FALSE;
+
+	m32.dwSize = sizeof (MODULEENTRY32);
+	Module32First(hSnap, &m32);
+
+	do {
+		RemoveBaseModules((DWORD) m32.modBaseAddr);
+	} while ( Module32Next(hSnap, &m32) );
+
+
+	return TRUE;
 }
 
 
+
 void StartAC ( ) {
-	BOOL isDetected;
-	DWORD dwRet;
+	AnalysisMemoryPages();
+	return;
 
 	InitProtectedCalls();
-		
+	
 	while ( TRUE ) {
-		//CHECK_VHOOK( isDetected, CheckVirtualTableHook (g_dwEngine, (DWORD *) (g_Data.dwBaseEngine +  0x0134260), g_Data.dwBaseEngine, 131) );
-		//CHECK_VHOOK( isDetected, CheckVirtualTableHook (g_dwClient, (DWORD *) (g_Data.dwBaseEngine +  0x122F540), g_Data.dwBaseClient,  43) );
+		ProtectedCalls_Rehook();
+		//AnalysisMemoryPages();
 
-		for ( DWORD dwIndex = 0; dwIndex < CHECK_ESP_FN_CURRENT; dwIndex++) {
-			if ( g_protectedCallSt[dwIndex].isUnlock ) {
-				/*dwRet = memcmp((void *) g_protectedCallSt[dwIndex].dwAddress, g_protectedCallSt[dwIndex].bBackup, sizeof (g_protectedCallSt[dwIndex].bBackup));
-				
-				if ( dwRet != 0 ) {
-					MessageBoxA(NULL, "El mio...", "...", MB_OK);
-				}*/
+		//D_CHEAT( CheckVirtualTableHook (g_dwEngine, (DWORD *) (g_Data.dwBaseEngine +  0x0134260), g_Data.dwBaseEngine, 131) );
+		//D_CHEAT( CheckVirtualTableHook (g_dwClient, (DWORD *) (g_Data.dwBaseEngine +  0x122F540), g_Data.dwBaseClient,  43) );
+		
+		//if ( DetectDebug() ) EXIT_MSG("Se detectó un depurador.");
+		//if ( !isDetectedBadApp() ) EXIT_MSG("Se detectó una aplicación no permitida.");
 
-				ProtectedCalls_Check_Before(dwIndex);
-			}
-		}
-			
-		if ( DetectDebug() ) 
-			EXIT_MSG("A debugger was detected.");
-
-		/*if ( !isDetectedBadApp() ) 
-			EXIT_MSG("A suspicious application was detected.");*/
-
-		Sleep(100); /* test */ 
+		Sleep(100);
 	}
 }
 
@@ -96,16 +199,13 @@ BOOL isDetectedBadApp ( ) {
 
 		if ( (dwRet = GetModuleFileNameExA(hProc, NULL, szBuff, sizeof szBuff)) > 0 ) {
 			GetHashMD5File(szBuff, szMd5);
-			
-			if ( CompareArrayString(szMd5, g_szMd5BadApp, 7) ) 
-				return FALSE;
+			if ( CompareArrayString(szMd5, g_szMd5BadApp, 1) ) return FALSE;
 		}
 
 		CloseHandle(hProc);
 	} while ( Process32NextW(hProcess, &p32) );
 
 	CloseHandle(hProcess);
-
 	return TRUE;
 }
 
@@ -115,7 +215,6 @@ BOOL GetHashMD5File( const char *szFileName, char *pszMd5 ) {
 	char szData[1024] = { 0 };
 	size_t nRead;
 	unsigned char bMd5[MD5_DIGEST_LENGTH];
-	unsigned int dwIndex;
 
 	if ( !fp ) 
 		return FALSE;
@@ -127,7 +226,7 @@ BOOL GetHashMD5File( const char *szFileName, char *pszMd5 ) {
 
 	MD5_Final(bMd5, &mdContext);
 	
-	for ( dwIndex = 0; dwIndex < MD5_DIGEST_LENGTH; dwIndex++ )
+	for ( DWORD dwIndex = 0; dwIndex < MD5_DIGEST_LENGTH; dwIndex++ )
 		sprintf(&pszMd5[dwIndex * 2], "%02x", bMd5[dwIndex]);
 	
 	return TRUE;
@@ -142,79 +241,6 @@ BOOL CompareArrayString(const char *szText, const char *pArray[], DWORD dwSize )
 	return FALSE;
 }
 
-BOOL CheckFolderFileMD5 ( const char *szRootPath, const char *szFolder, const char *szPathBackup, const char *szFiles[], 
-							DWORD dwSizeFiles, const char *szMD5Check[], const DWORD dwSizeMD5, BOOL isRemove ) {
-	WIN32_FIND_DATAA wFile = {0};
-	HANDLE hFile = NULL;
-	char szPathFile[MAX_PATH] = {0}, szPathPattern[MAX_PATH] = {0}, szPathFileBackup[MAX_PATH], szBuffMd5[32] = {0};
-
-	_snprintf(szPathPattern, sizeof szPathPattern, "%s%s*", szRootPath, szFolder);
-	hFile = FindFirstFileA(szPathPattern, &wFile);
-
-	if ( hFile == INVALID_HANDLE_VALUE ) 
-		return FALSE;
-
-	do {
-		if ( *(wFile.cFileName) == '.' || wFile.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) 
-			continue;
-
-		_snprintf(szPathFile, sizeof szPathFile, "%s\\%s", szRootPath, wFile.cFileName);
-
-		if ( !CompareArrayString(wFile.cFileName, szFiles, dwSizeFiles) && isRemove ) {
-			_snprintf(szPathFileBackup, sizeof szPathFileBackup, "%s\\%s", szPathBackup, wFile.cFileName);
-			MoveFileExA(szPathFile, szPathFileBackup, MOVEFILE_REPLACE_EXISTING);
-		} else {
-			if ( !GetHashMD5File(szPathFile, szBuffMd5) ) 
-				return FALSE;
-
-			if ( !CompareArrayString(szBuffMd5, szMD5Check, dwSizeMD5) )
-				return FALSE;
-		}
-	} while ( FindNextFileA(hFile, &wFile ) );
-
-	FindClose(hFile);
-	return TRUE;
-}
-
-
-BOOL CheckFileMD5 ( const char *szPathRoot, const char *szFile, const char *szMD5 ) {
-	char szBuff[MAX_PATH], szMD5Actually[33];
-
-	_snprintf(szBuff, MAX_PATH, "%s\\%s", szPathRoot, szFile);
-	GetHashMD5File(szBuff, szMD5Actually);
-
-	if ( strncmp(szMD5, szMD5Actually, sizeof szMD5Actually) != 0 ) {
-		printf("%s\\%s", szPathRoot, szFile	);
-		return FALSE;
-	}
-
-	return TRUE;
-}
-
-
-BOOL InitMD5Check( ) {
-	char szPath[MAX_PATH], szPathBackup[MAX_PATH];
-
-	GetCurrentDirectoryA(MAX_PATH, szPath);
-
-	_snprintf(szPathBackup, MAX_PATH, "%s\\9folder", szPath);
-	CreateDirectoryA(szPathBackup, NULL);
-
-	/*CHECKFILE(CheckFolderFileMD5(szPath, "\\", szPathBackup, g_szFile, 28, g_szMd5, 28, TRUE));
-	CHECKFILE(CheckFileMD5(szPath, "valve\\cl_dlls\\GameUI.dll", "4c8de6f302d592b6da05b386efe8afac"));
-	CHECKFILE(CheckFileMD5(szPath, "valve\\cl_dlls\\particleman.dll", "f0ab4c734cbaf25b5bea698c054af768"));
-	CHECKFILE(CheckFileMD5(szPath, "cstrike\\cl_dlls\\client.dll", "4e48070d709c6504dbbba3ade0ab7d9d"));
-	CHECKFILE(CheckFileMD5(szPath, "cstrike\\dlls\\mp.dll", "92f5b664ffcb563389341597ed1c76c8"));
-	CHECKFILE(CheckFileMD5(szPath, "..\\..\\..\\bin\\XInput1_3.dll", "da9506e800e13da0abba32bb0c105382"));*/
-	/*CHECKFILE(CheckFileMD5(szPath, "..\\..\\..\\crashhandler.dll", "a73291b2a26fe6e2f8af35c5322a5a2f"));*/
-	/*CHECKFILE(CheckFileMD5(szPath, "..\\..\\..\\gameoverlayrenderer.dll", "3daf150da1ed296c957795eb7e578804"));*/
-	/*CHECKFILE(CheckFileMD5(szPath, "..\\..\\..\\steamclient.dll", "753773162d028d0de51a035a6e9a8ac6"));*/
-	/*CHECKFILE(CheckFileMD5(szPath, "..\\..\\..\\tier0_s.dll", "10cd368f0f6ec2a692aadacd4c1dfbd3"));*/
-	/*CHECKFILE(CheckFileMD5(szPath, "..\\..\\..\\vstdlib_s.dll", "6be502827581d17acd963a15f6ea1144"));*/
-	/*CHECKFILE(CheckFileMD5(szPath, "cstrike\\sprites\\gas_puff_01.spr", "ac7c193ca297e483fb9839ed0db2a891"));*/
-
-	return TRUE;
-}
 
 BOOL VirtualTableCheck( DWORD dwBase ) {
 	IMAGE_DOS_HEADER *pDosHeader = (IMAGE_DOS_HEADER *) dwBase;
@@ -228,23 +254,21 @@ BOOL SignatureCheck ( ) {
 	return FALSE;
 }
 
-void InitProtectedCalls ( ) {
-	/* opengl */
-	SetProtectedCalls(0, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glBegin"),		0);
-	SetProtectedCalls(1, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glEnd"),			0);	
-	SetProtectedCalls(2, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glVertex3fv"),	0);	
-	SetProtectedCalls(3, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glClear"),		0);
-	SetProtectedCalls(4, (DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glPopMatrix"),	0);
+void InitProtectedCalls ( ) {	
+	SetProtectedCalls((DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glBegin"), 0);
+	SetProtectedCalls((DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glEnd"),	0);	
+	SetProtectedCalls((DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glVertex3fv"), 0);	
+	SetProtectedCalls((DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glClear"), 0);
+	SetProtectedCalls((DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glPopMatrix"), 0);
 
-	/* motor */
-	SetProtectedCalls(5, g_Data.dwBaseEngine + 0xc570,  0);  // GetLocalPlayer
-	SetProtectedCalls(6, g_Data.dwBaseEngine + 0x3c730, 0);  // pfnFillRGBA
-	SetProtectedCalls(7, g_Data.dwBaseEngine + 0x6d10,  0);  // pfnDrawLocalizedConsoleString
-	SetProtectedCalls(8, g_Data.dwBaseEngine + 0xc980,  0);  // pfnSetScreenFade
-	SetProtectedCalls(9, g_Data.dwBaseEngine + 0xc5b0,  0);  // GetEntityByIndex
+	SetProtectedCalls(g_Data.dwBaseEngine + 0xc570, 0);  // GetLocalPlayer
+	SetProtectedCalls(g_Data.dwBaseEngine + 0x3c730, 0);  // pfnFillRGBA
+	SetProtectedCalls(g_Data.dwBaseEngine + 0x6d10, 0);  // pfnDrawLocalizedConsoleString
+	SetProtectedCalls(g_Data.dwBaseEngine + 0xc980, 0);  // pfnSetScreenFade
+	SetProtectedCalls(g_Data.dwBaseEngine + 0xc5b0, 0);  // GetEntityByIndex
 }
 
-void SetProtectedCalls ( DWORD dwIndex, DWORD dwToProtected, DWORD dwOriginalCall ) {
+void SetProtectedCalls ( DWORD dwToProtected, DWORD dwOriginalCall ) {
 	UNREFERENCED_PARAMETER(dwOriginalCall); /* todavía no está la implementación */
 
 	DWORD dwCalc;
@@ -259,68 +283,67 @@ void SetProtectedCalls ( DWORD dwIndex, DWORD dwToProtected, DWORD dwOriginalCal
 		/* 25: ret */ 0xC3 
 	};
 
-	g_protectedCallSt[dwIndex].isUnlock = FALSE;
-	g_protectedCallSt[dwIndex].dwAddress = dwToProtected;
-	memcpy(g_protectedCallSt[dwIndex].bOp, bCode, sizeof (bCode));
-	memcpy(&g_protectedCallSt[dwIndex].bOp[6],  &dwIndex, sizeof DWORD);
-	dwCalc = ((DWORD) ProtectedCalls_Check - (DWORD) &g_protectedCallSt[dwIndex].bOp[11]) - 4;
-	memcpy(&g_protectedCallSt[dwIndex].bOp[11], &dwCalc , sizeof DWORD);
-	dwCalc = (dwToProtected - (DWORD) &g_protectedCallSt[dwIndex].bOp[20]) - 4;
-	memcpy(&g_protectedCallSt[dwIndex].bOp[20], &dwCalc, sizeof DWORD);
+	g_protectedCallSt[g_dwIndexProtectedCall].isUnlock = FALSE;
+	g_protectedCallSt[g_dwIndexProtectedCall].dwAddress = dwToProtected;
+	memcpy(g_protectedCallSt[g_dwIndexProtectedCall].bOp, bCode, sizeof (bCode));
+	memcpy(&g_protectedCallSt[g_dwIndexProtectedCall].bOp[6],  &g_dwIndexProtectedCall, sizeof DWORD);
+	dwCalc = ((DWORD) ProtectedCalls_Check - (DWORD) &g_protectedCallSt[g_dwIndexProtectedCall].bOp[11]) - 4;
+	memcpy(&g_protectedCallSt[g_dwIndexProtectedCall].bOp[11], &dwCalc , sizeof DWORD);
+	dwCalc = (dwToProtected - (DWORD) &g_protectedCallSt[g_dwIndexProtectedCall].bOp[20]) - 4;
+	memcpy(&g_protectedCallSt[g_dwIndexProtectedCall].bOp[20], &dwCalc, sizeof DWORD);
 
-	HookInMemory(0xE9, NULL, NULL, dwToProtected, (DWORD) &g_protectedCallSt[dwIndex].bOp[0], g_protectedCallSt[dwIndex].bBackup);
+	HookInMemory(0xE9, NULL, NULL, dwToProtected, (DWORD) &g_protectedCallSt[g_dwIndexProtectedCall].bOp[0], g_protectedCallSt[g_dwIndexProtectedCall].bBackup);
+
+	g_dwIndexProtectedCall++;
 }
 
 void ProtectedCalls_Check ( DWORD dwIndex, DWORD dwAddr ) {
 	MEMORY_BASIC_INFORMATION mInfo;
 	char szModule[MAX_PATH], szMd5[33];
-	DWORD dwLen;
+	DWORD dwRetVirtual, dwRetFileName;
+	IMAGE_DOS_HEADER *pDosHeader;
+	IMAGE_NT_HEADERS *pNtHeader;
 
-	VirtualQuery((void *) dwAddr, &mInfo, sizeof (MEMORY_BASIC_INFORMATION));
-	dwLen = GetModuleFileNameA((HMODULE) mInfo.AllocationBase, szModule, sizeof (szModule));
-	
-	/* Aún falta por arreglar y diferenciar que él módulo donde se llama sea legitimo.
-	 * Con un dwLen <= 0 debería bastar, pero aún no me convence... 
-	 *
-	 * if ( dwLen <= 0 || ...?? ) 
-	 *    DetectedCheat(dwAddr);
-	*/
+	dwRetVirtual = VirtualQuery((void *) dwAddr, &mInfo, sizeof (MEMORY_BASIC_INFORMATION));
 
-	//GetMo
-	//printf("%s\n", szModule);
+	pDosHeader = (IMAGE_DOS_HEADER *) mInfo.AllocationBase;
+	pNtHeader = (IMAGE_NT_HEADERS *) ((DWORD_PTR) pDosHeader + pDosHeader->e_lfanew);
 
+	dwRetFileName = GetModuleFileNameA((HMODULE) mInfo.AllocationBase, szModule, sizeof (szModule));
 
-	/*if ( dwLen ) {
-		GetHashMD5File(szModule, szMd5);
-	} else {
-		DetectedCheat(dwAddr);
-	}*/
+	if ( !dwRetFileName || !dwRetVirtual || pDosHeader->e_magic != IMAGE_DOS_SIGNATURE || pNtHeader->Signature != IMAGE_NT_SIGNATURE )
+		DetectedCheat(dwAddr); 
 
 	UnHookInMemory(NULL, NULL, g_protectedCallSt[dwIndex].dwAddress, g_protectedCallSt[dwIndex].bBackup);
 	g_protectedCallSt[dwIndex].isUnlock = TRUE;
 }
 
-void ProtectedCalls_Check_Before ( DWORD dwIndex ) {
-	HookInMemory(0xE9, NULL, NULL, g_protectedCallSt[dwIndex].dwAddress, (DWORD) &g_protectedCallSt[dwIndex].bOp[0], g_protectedCallSt[dwIndex].bBackup);
-	g_protectedCallSt[dwIndex].isUnlock = FALSE;
+void ProtectedCalls_Rehook ( ) {
+	for ( DWORD dwIndex = 0; dwIndex < g_dwIndexProtectedCall; dwIndex++)
+		if ( g_protectedCallSt[dwIndex].isUnlock ) {
+			HookInMemory(0xE9, NULL, NULL, g_protectedCallSt[dwIndex].dwAddress, (DWORD) &g_protectedCallSt[dwIndex].bOp[0], NULL);
+			g_protectedCallSt[dwIndex].isUnlock = FALSE;
+
+			break;
+		}
 }	
 
-BOOL CheckVirtualTableHook ( DWORD *pAddrA, DWORD *pAddrB, DWORD dwBase, DWORD dwSize ) {
-	DWORD dwIndex = 0;
-	
-	for ( ; dwIndex < dwSize; dwIndex++ ) {
+BOOL CheckVirtualTableHook ( DWORD *pAddrA, DWORD *pAddrB, DWORD dwBase, DWORD dwSize ) {	
+	for ( DWORD dwIndex = 0; dwIndex < dwSize; dwIndex++, pAddrB ++ ) {
 		if ( pAddrA[dwIndex] + dwBase != *pAddrB ) return FALSE;
-		pAddrB ++;
 	}
 
 	return TRUE;
 }
 
 void DetectedCheat ( DWORD dwAddr ) {
+	MessageBox(NULL, L"Se detectó una llamada inusual.", L"debug", MB_OK);
+	return;
 	DWORD * pInGame = (DWORD *) 0x10565C0 + g_Data.dwBaseClient;
 
 	if ( *pInGame > 4 ) {
 		// send data...
+
 	}
 
 

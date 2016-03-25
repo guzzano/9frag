@@ -20,10 +20,47 @@
 
 #include "hook.h"
 
-#define EXIT_MSG(x) { MessageBoxA(NULL, x, "9frag alert!", MB_OK); ExitProcess(0x0); }
-#define CHECKFILE(x) if ( !x ) { return FALSE; }
-#define CHECK_VHOOK(x, y) if ( !(x = y) ) { DetectedCheat(x); }
-#define CHECK_ESP_FN_CURRENT 9
+#define EXIT_MSG(x) { MessageBoxA(NULL, x, "9frag vAC", MB_OK); ExitProcess(0x0); }
+#define D_CHEAT(y) if ( !y ) { DetectedCheat(0); }
+
+/*
+typedef struct _WIN32LDR
+{
+     LIST_ENTRY InLoadOrderLinks;
+     LIST_ENTRY InMemoryOrderLinks;
+     LIST_ENTRY InInitializationOrderLinks;
+     PVOID DllBase;
+     PVOID EntryPoint;
+     ULONG SizeOfImage;
+     UNICODE_STRING FullDllName;
+     UNICODE_STRING BaseDllName;
+     ULONG Flags;
+     WORD LoadCount;
+     WORD TlsIndex;
+
+     union
+     {
+          LIST_ENTRY HashLinks;
+          struct
+          {
+               PVOID SectionPointer;
+               ULONG CheckSum;
+          };
+     };
+     union
+     {
+          ULONG TimeDateStamp;
+          PVOID LoadedImports;
+     };
+
+     _ACTIVATION_CONTEXT * EntryPointActivationContext;
+     PVOID PatchInformation;
+     LIST_ENTRY ForwarderLinks;
+     LIST_ENTRY ServiceTagLinks;
+     LIST_ENTRY StaticLinks;
+} WIN32LDR;
+*/
+
 
 typedef struct {
 	DWORD dwBaseEngine;
@@ -39,11 +76,11 @@ typedef struct _ProtectedCalls_ {
 	BOOL isUnlock;
 } pCall;
 
-typedef struct _VirtualQueryProtect_ {
-	DWORD dwAddressProtected[256];
-	DWORD dwFnSize[256];
-	DWORD dwCallOriginal;
-} vQueryProtect;
+typedef struct _PagesModules_ {
+	DWORD dwBase;
+	DWORD dwSize;
+	struct _PagesModules_ * pNext;
+} PagesModules;
 
 static DWORD g_dwClient[43] =
 {
@@ -80,55 +117,31 @@ static DWORD g_dwClient[43] =
     0x007900, 0x007940, 0x007990, 0x00aca0, 0x03c8e0
 };
 
-static const char *g_szFile[] = {
-	"a3dapi.dll", "avcodec-53.dll", "avformat-53.dll", "avutil-51.dll",
-	"binkawin.asi", "chromehtml.dll", "Core.dll", "DemoPlayer.dll",
-	"FileSystem_Stdio.dll", "hl.exe", "hlds.exe", "hltv.exe", "htmlcache",
-    "hw.dll", "icudt.dll", "language.inf", "libcef.dll", "Mss32.dll",
-	"mssmp3.asi", "mssvoice.asi", "proxy.dll", "SDL2.dll", "steam_api.dll",
-	"sw.dll", "swds.dll", "tier0.dll", "vgui.dll", "vgui2.dll", "vstdlib.dll"
-}, *g_szMd5[] = {
-	"0b3f04a2757f5e43140ac81db1afdc42", "bba1fe328cea501fcce1e5df16276439",
-	"c5ccb86cd745746b9908031a54315f90", "2a8b8a15a58edf3b443083ec29894e54",
-	"f415f94065be11ed9a3b55a5d9baeae7", "43d2a3b6f8125842e6ea136897493af4",
-	"0833126204df0583bd8b8004163f922a", "bdc5238414662c3b1fb0304a632e524c",
-	"13b853b53a6e0512bd55e007e7992a9e", "8a8c398d4cb36461dc16c7dc0ec60437",
-	"56cc24bba3b8c50cf3a679cabaec9207", "1f524f409dd7dce0e579d0d38c610b6d",
-	"3b6460a5604317b1bfacdd6ab1a58f87", "045d0f4f41ca53d4cb22bdc814a22b64",
-	"c754dc22669532620b48b3fe9d299d7c", "60be2cec0d95bb135d4452f39aac6805",
-	"1f7c162a3e43bd6bbd65fa30b6659637", "ae0183c77404ac09270f44bb1a3e1204",
-	"ac55930ed33d9c3a6af4d398af5a9c89", "cbf28ab5ffe69d369c21550292fa3497",
-	"3b18fa46189823696366b2a9e2e05dbe", "cc3d1ca6401e2ab106733c7bd7489cad",
-	"a35aa6087c18c9ef5ca3f46d63ca2671", "b542c04c06fed33812ac0a0ebd8ec88e",
-	"fbfeb5dae01b4b2456cd1ebabbed4922", "4cbd03f4c6da4cb5c0a619579a16bc19",
-	"86660114a3823dd4f2960fe1ab92123d", "866e49fc80c2b7500334a716b177afad"
-}, *g_szMd5BadApp[] = { 
+static const char *g_szMd5BadApp[] = { 
 	/* DCInjector.exe */ "d7a7966cc50771be6bd25bf494ee9673", /* sinJect.exe */"1de8afdce3d6c1c2e05b83c7ce77fd30", 
 	/* Winject.exe */ "d17e73c68c23598558f5b3c23da04755", /*ollydbg v1 */ "bd3abb4ac01da6edb30006cc55953be8", 
 	/* ollydbg v2 */ "a8d8531a3995494a1cfc62f7e7cc77ec", /* autoinjectordll */"1dbb21e7ef1732f3235227e2a9d84c23",
-	/*extreme-injector */ "ecc00d4e4b2cbf7caefdce122f017c3d"} ;
+	/*extreme-injector */ "ecc00d4e4b2cbf7caefdce122f017c3d"
+};
 
-static pCall g_protectedCallSt[CHECK_ESP_FN_CURRENT] = {0};
+static pCall g_protectedCallSt[1024] = {0};
 static BYTE g_bVirtualQuery[6]  = {0};
 static GameData g_Data = {0};
-static vQueryProtect vQProtect = {0};
+static DWORD g_dwIndexProtectedCall = 0;
+static PagesModules * g_pFirts = NULL, *g_pLast = NULL;
 
 void Init9fragAC ( );
 void StartAC ( );
 BOOL isDetectedBadApp ( );
 BOOL DetectDebug ( );
 BOOL GetHashMD5File( const char *szFileName, char *pszMd5 );
-BOOL InitMD5Check ( );
 BOOL CompareArrayString(const char *szText, const char *pArray[], DWORD dwSize );
-BOOL CheckFolderFileMD5 ( const char *szRootPath, const char *szFolder, const char *szPathBackup, const char *szFiles[], DWORD dwSizeFiles, const char *szMD5Check[], const DWORD dwSizeMD5, BOOL isRemove );
-BOOL CheckFileMD5 ( const char *szPathRoot, const char *szFile, const char *szMD5);
-BOOL InitMD5Check( );
 BOOL VirtualTableCheck( DWORD dwBase );
 BOOL SignatureCheck ( );
 void InitProtectedCalls ( );
-void SetProtectedCalls ( DWORD dwIndex, DWORD dwToProtected, DWORD dwOriginalCall );
+void SetProtectedCalls ( DWORD dwToProtected, DWORD dwOriginalCall );
 void ProtectedCalls_Check ( DWORD dwAddr, DWORD dwIndex );
-void ProtectedCalls_Check_Before ( DWORD dwIndex ) ;
+void ProtectedCalls_Rehook ( ) ;
 BOOL CheckVirtualTableHook ( DWORD *pAddrA, DWORD *pAddrB, DWORD dwBase, DWORD dwSize );
 void DetectedCheat( DWORD dwAddr );
 
