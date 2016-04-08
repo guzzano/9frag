@@ -8,13 +8,20 @@
  */
 
 #include "vac.h"
-
+#include "game.h"
 
 /*LONG WINAPI UnhandledException (LPEXCEPTION_POINTERS exceptionInfo)  
 {
 	MessageBoxA(NULL, "... *sorry, vAC is crashed* ;(", "9frag alert!", MB_OK);
 	return EXCEPTION_EXECUTE_HANDLER;  
 }*/
+
+ /*
+ * No están incluidos los archivos game.cpp y game.h que se encargarían de la modificación del juego
+ * porque se tiene que hacer una verficación de toda esa parte del código para luego agregar firmas
+ * a los trampolines que haré en esa parte del código. El vAC es fácil y no es algo profesional, más
+ * bien, es fácil de burlar si sabes cómo y dónde editar. 
+ */
 
 void Init9fragAC ( ) {
 	AllocConsole();
@@ -27,8 +34,9 @@ void Init9fragAC ( ) {
 			&& ((DWORD *) (g_Data.dwBaseEngine + 0x0134260)) != NULL  ) break;
 	}
 
-	if ( !CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE) StartAC, NULL, 0, NULL) )
-		EXIT_MSG("Discúlpanos, vAC no se puedo iniciar, reinicia la computadora y intenta de nuevo.");
+	GetHLFn( g_Data.dwBaseEngine, g_Data.dwBaseClient );
+	/*if ( !CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE) StartAC, NULL, 0, NULL) )
+		EXIT_MSG("Discúlpanos, vAC no se puedo iniciar, reinicia la computadora y intenta de nuevo.");*/
 }
 
 //void AnalysisMemoryAdd
@@ -42,6 +50,7 @@ BOOL isReaMemory( DWORD dwProtect ) {
 		case PAGE_EXECUTE_WRITECOPY:
 		case PAGE_READONLY:
 		case PAGE_WRITECOPY:
+		/*case PAGE_READWRITE:*/
 			return TRUE;
 	}
 
@@ -56,46 +65,17 @@ BYTE *SearchBytePattern ( BYTE *pData, DWORD dwLenData, BYTE *pPattern, DWORD dw
 		if ( memcmp(pFound, pPattern, dwLenPattern ) == 0 ) return pFound;
 		pTemp = (BYTE *) pFound + dwLenPattern;
 
+		printf("%x\n", (DWORD) pTemp);
+
 		if ( (DWORD) (pTemp - pData) > dwLenData) break; 
 	}
 
 	return NULL;
 }
 
-void AddBaseModules( DWORD dwBase ) {
-	PagesModules *pAux = (PagesModules *) malloc(sizeof(PagesModules));
-	if ( !pAux ) return;
-
-	pAux->dwBase = dwBase;
-	pAux->pNext = NULL;
-
-	if ( !g_pFirts ) {
-		g_pFirts = pAux;
-		g_pLast = pAux;
-	} else { 
-		g_pLast->pNext = pAux;
-		g_pLast = pAux;
-	}
-}
-
-void RemoveBaseModules( DWORD dwBase ) {
-	PagesModules *pAux = g_pFirts, *pPrev = NULL;
-	if ( !pAux ) return;
-
-	while ( pAux != NULL ) {
-		if ( pAux->dwBase == dwBase ) {
-			if ( pPrev ) pPrev->pNext = pAux->pNext;
-			else if ( !pPrev ) g_pFirts = pAux->pNext;
-		}
-
-		pPrev = pAux;
-		pAux = pAux->pNext;
-	}
-}
-
 /* La idea principal era hacerlo funcionar mediante en analísis de la memoria y la comparación con 
  * los módulos en ldr del PEB, pero en esta versión no sé porque no hay margen correcto en la estructura
- * y me da datos en donde no debería.
+ * y me da datos en donde no debería. Dejo esto por aquí para posteriores implementaciones.
 
 	LDR_DATA_TABLE_ENTRY *pLdrDLL;
 
@@ -107,15 +87,37 @@ void RemoveBaseModules( DWORD dwBase ) {
 	__asm pop eax 
 */
 
+void RemoveValueToArray( DWORD dwRemove, DWORD *pData, DWORD *dwSize ) {
+	DWORD dwIndex;
+	BOOL isF = FALSE;
+
+	for ( dwIndex = 0; dwIndex < *dwSize && isF == FALSE; dwIndex++ )
+		if ( pData[dwIndex] == dwRemove ) isF = TRUE;
+
+	if ( !isF ) return;
+
+	dwIndex--;
+	for ( ; dwIndex + 1 <= *dwSize; dwIndex++ ) pData[dwIndex] = pData[dwIndex + 1];
+
+	pData[dwIndex] = 0;
+	*dwSize--;
+}
+
 BOOL AnalysisMemoryPages( ) {
 	BYTE MZHeader[4] = {0x4D, 0x5A, 0x90}, *pData = NULL, *pFound = NULL;
 	MEMORY_BASIC_INFORMATION mInfo = {0};
 	SYSTEM_INFO sInfo = {0};
-	DWORD dwLast = 0, dwBase;
+	DWORD dwLast = 0, dwBase, dwModules[1024] = {0}, dwMSize = 0;
 	HANDLE hSnap;
 	MODULEENTRY32 m32 = {0};
 
+	/* test */
+	BYTE t[26] = { 0x43, 0x53, 0x46, 0x20, 0x46, 0x58, 0x20, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73 };
+
 	GetSystemInfo(&sInfo);
+
+	hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE32 | TH32CS_SNAPMODULE , 0);
+	if ( hSnap == INVALID_HANDLE_VALUE ) return FALSE;
 
 	for ( DWORD dwAddr = 0; dwAddr <= (DWORD) sInfo.lpMaximumApplicationAddress; ) {
 		VirtualQuery((void *) dwAddr, &mInfo, sizeof (MEMORY_BASIC_INFORMATION));
@@ -123,8 +125,18 @@ BOOL AnalysisMemoryPages( ) {
 			dwBase = ( dwLast == (DWORD) mInfo.AllocationBase ) ? (DWORD) mInfo.BaseAddress : (DWORD) mInfo.AllocationBase; 
 			pData = (BYTE *) dwBase;
 
-			if ( (pFound = SearchBytePattern(pData, (DWORD) mInfo.RegionSize, MZHeader, sizeof (MZHeader))) != NULL )
-				AddBaseModules(dwBase);
+			printf("%x - %x\n", dwBase, mInfo.RegionSize);
+
+			/* MZ header */
+
+			//printf("%x - %x\n", (DWORD) mInfo.AllocationBase, (DWORD) mInfo.BaseAddress );
+			/*if ( (pFound = SearchBytePattern(pData, (DWORD) mInfo.RegionSize, MZHeader, sizeof (MZHeader))) != NULL )
+				dwModules[dwMSize++] = (DWORD) pFound;*/
+
+			/* Cheats signature */
+			if ( (pFound = SearchBytePattern(pData, (DWORD) mInfo.RegionSize, t, sizeof (t)) ) != NULL ) {
+				MessageBoxA(NULL, "", "", MB_OK);
+			}
 
 			dwLast = (DWORD) mInfo.AllocationBase;
 		}
@@ -133,22 +145,27 @@ BOOL AnalysisMemoryPages( ) {
 		memset(&mInfo, 0, sizeof (MEMORY_BASIC_INFORMATION));
 	}
 
-	hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE32 | TH32CS_SNAPMODULE , 0);
-
-	if ( hSnap == INVALID_HANDLE_VALUE ) 
-		return FALSE;
-
 	m32.dwSize = sizeof (MODULEENTRY32);
 	Module32First(hSnap, &m32);
 
 	do {
-		RemoveBaseModules((DWORD) m32.modBaseAddr);
+		RemoveValueToArray((DWORD) m32.modBaseAddr, dwModules, &dwMSize);
 	} while ( Module32Next(hSnap, &m32) );
 
+	/*
+	* analysis...
+	*/
 
+	CloseHandle(hSnap);
 	return TRUE;
 }
 
+/*
+*/
+
+void CreateScreenshot() {
+
+}
 
 
 void StartAC ( ) {
@@ -156,16 +173,16 @@ void StartAC ( ) {
 	return;
 
 	InitProtectedCalls();
-	
+
 	while ( TRUE ) {
 		ProtectedCalls_Rehook();
-		//AnalysisMemoryPages();
+		AnalysisMemoryPages();
 
-		//D_CHEAT( CheckVirtualTableHook (g_dwEngine, (DWORD *) (g_Data.dwBaseEngine +  0x0134260), g_Data.dwBaseEngine, 131) );
-		//D_CHEAT( CheckVirtualTableHook (g_dwClient, (DWORD *) (g_Data.dwBaseEngine +  0x122F540), g_Data.dwBaseClient,  43) );
+		D_CHEAT( CheckVirtualTableHook (g_dwEngine, (DWORD *) (g_Data.dwBaseEngine +  0x0134260), g_Data.dwBaseEngine, 131) );
+		D_CHEAT( CheckVirtualTableHook (g_dwClient, (DWORD *) (g_Data.dwBaseEngine +  0x122F540), g_Data.dwBaseClient,  43) );
 		
 		//if ( DetectDebug() ) EXIT_MSG("Se detectó un depurador.");
-		//if ( !isDetectedBadApp() ) EXIT_MSG("Se detectó una aplicación no permitida.");
+		//if ( !isDetectedBadApp() ) EXIT_MSG("Se detectó una aplicación no permitida.");	
 
 		Sleep(100);
 	}
@@ -179,14 +196,14 @@ BOOL DetectDebug ( ) {
 	__asm mov pPeb, eax
 	__asm pop eax
 
-	return (BOOL) pPeb->BeingDebugged;
+	return ( BOOL ) pPeb->BeingDebugged;
 }
 
 BOOL isDetectedBadApp ( ) {
 	PROCESSENTRY32 p32 = {0};
 	HANDLE hProcess, hProc;
 	char szBuff[512] = {0}, szMd5[33];
-	DWORD dwRet, dwLen;
+	DWORD dwRet;
 	
 	if ( (hProcess = CreateToolhelp32Snapshot(PROCESS_ALL_ACCESS, 0)) == INVALID_HANDLE_VALUE )
 		return FALSE;
@@ -199,7 +216,7 @@ BOOL isDetectedBadApp ( ) {
 
 		if ( (dwRet = GetModuleFileNameExA(hProc, NULL, szBuff, sizeof szBuff)) > 0 ) {
 			GetHashMD5File(szBuff, szMd5);
-			if ( CompareArrayString(szMd5, g_szMd5BadApp, 1) ) return FALSE;
+			if ( CompareArrayString(szMd5, g_szMd5BadApp, sizeof (g_szMd5BadApp) / sizeof (g_szMd5BadApp[0])) ) return FALSE;
 		}
 
 		CloseHandle(hProc);
@@ -260,12 +277,13 @@ void InitProtectedCalls ( ) {
 	SetProtectedCalls((DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glVertex3fv"), 0);	
 	SetProtectedCalls((DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glClear"), 0);
 	SetProtectedCalls((DWORD) GetProcAddress(GetModuleHandleA("opengl32.dll"), "glPopMatrix"), 0);
-
+	SetProtectedCalls(g_Data.dwBaseEngine + 0x3c8e0, 0); // 0x3c8e0
 	SetProtectedCalls(g_Data.dwBaseEngine + 0xc570, 0);  // GetLocalPlayer
-	SetProtectedCalls(g_Data.dwBaseEngine + 0x3c730, 0);  // pfnFillRGBA
+	SetProtectedCalls(g_Data.dwBaseEngine + 0x3c730, 0);  // pfnFillRGBA 0x3c730
 	SetProtectedCalls(g_Data.dwBaseEngine + 0x6d10, 0);  // pfnDrawLocalizedConsoleString
 	SetProtectedCalls(g_Data.dwBaseEngine + 0xc980, 0);  // pfnSetScreenFade
 	SetProtectedCalls(g_Data.dwBaseEngine + 0xc5b0, 0);  // GetEntityByIndex
+	SetProtectedCalls((DWORD) GetProcAddress(GetModuleHandleA("Kernel32.dll"), "CreateThread"), 0);
 }
 
 void SetProtectedCalls ( DWORD dwToProtected, DWORD dwOriginalCall ) {
@@ -292,14 +310,15 @@ void SetProtectedCalls ( DWORD dwToProtected, DWORD dwOriginalCall ) {
 	dwCalc = (dwToProtected - (DWORD) &g_protectedCallSt[g_dwIndexProtectedCall].bOp[20]) - 4;
 	memcpy(&g_protectedCallSt[g_dwIndexProtectedCall].bOp[20], &dwCalc, sizeof DWORD);
 
-	HookInMemory(0xE9, NULL, NULL, dwToProtected, (DWORD) &g_protectedCallSt[g_dwIndexProtectedCall].bOp[0], g_protectedCallSt[g_dwIndexProtectedCall].bBackup);
+	HookInMemory( 0xE9, NULL, NULL, dwToProtected, (DWORD) &g_protectedCallSt[g_dwIndexProtectedCall].bOp[0], 
+		g_protectedCallSt[g_dwIndexProtectedCall].bBackup );
 
 	g_dwIndexProtectedCall++;
 }
 
 void ProtectedCalls_Check ( DWORD dwIndex, DWORD dwAddr ) {
 	MEMORY_BASIC_INFORMATION mInfo;
-	char szModule[MAX_PATH], szMd5[33];
+	char szModule[MAX_PATH];
 	DWORD dwRetVirtual, dwRetFileName;
 	IMAGE_DOS_HEADER *pDosHeader;
 	IMAGE_NT_HEADERS *pNtHeader;
@@ -310,6 +329,8 @@ void ProtectedCalls_Check ( DWORD dwIndex, DWORD dwAddr ) {
 	pNtHeader = (IMAGE_NT_HEADERS *) ((DWORD_PTR) pDosHeader + pDosHeader->e_lfanew);
 
 	dwRetFileName = GetModuleFileNameA((HMODULE) mInfo.AllocationBase, szModule, sizeof (szModule));
+
+	//printf("%x - %s\n", dwAddr, szModule);
 
 	if ( !dwRetFileName || !dwRetVirtual || pDosHeader->e_magic != IMAGE_DOS_SIGNATURE || pNtHeader->Signature != IMAGE_NT_SIGNATURE )
 		DetectedCheat(dwAddr); 
